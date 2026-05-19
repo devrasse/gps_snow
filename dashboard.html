@@ -243,24 +243,16 @@ const VWORLD_KEY = 'CCA5DC05-6EDE-3BE5-A2DE-582966148562';
 // ============================================================
 // 차량 정보 테이블
 // ============================================================
-// const VEHICLES = {
-//   vehicle_1:    { id:'1',    name:'1호차',  license:'006마7163',   color:'#888888', geojson:'일호차_FeaturesToJSON.geojson',  order:0 },
-//   vehicle_2:    { id:'2',    name:'2호차',  license:'006마8362',   color:'#00a9e4', geojson:'이호차_FeaturesToJSON.geojson',  order:1 },
-//   vehicle_3:    { id:'3',    name:'3호차',  license:'67사7717',    color:'#38a700', geojson:'삼호차_FeaturesToJSON.geojson',  order:2 },
-//   vehicle_4:    { id:'4',    name:'4호차',  license:'-',           color:'#9b59b6', geojson:'사호차_FeaturesToJSON.geojson',  order:3 },
-//   vehicle_5:    { id:'5',    name:'5호차',  license:'인천06아7616', color:'#e79972', geojson:'오호차_FeaturesToJSON.geojson',  order:4 },
-//   vehicle_6:    { id:'6',    name:'6호차',  license:'06사6617',    color:'#e74c3c', geojson:'육호차_FeaturesToJSON.geojson',  order:5 },
-//   vehicle_city: { id:'city', name:'종건'ㄴ,   license:'종합건설본부', color:'#cccccc', geojson:'종건_FeaturesToJSON.geojson',   order:6 },
-// };
 const VEHICLES = {
-  "1":    { id:'1',    name:'1호차',  license:'006마7163',   color:'#888888', geojson:'일호차_FeaturesToJSON.geojson',  order:0 },
-  "2":    { id:'2',    name:'2호차',  license:'006마8362',   color:'#00a9e4', geojson:'이호차_FeaturesToJSON.geojson',  order:1 },
-  "3":    { id:'3',    name:'3호차',  license:'67사7717',    color:'#38a700', geojson:'삼호차_FeaturesToJSON.geojson',  order:2 },
-  "4":    { id:'4',    name:'4호차',  license:'-',           color:'#9b59b6', geojson:'사호차_FeaturesToJSON.geojson',  order:3 },
-  "5":    { id:'5',    name:'5호차',  license:'인천06아7616', color:'#e79972', geojson:'오호차_FeaturesToJSON.geojson',  order:4 },
-  "6":    { id:'6',    name:'6호차',  license:'06사6617',    color:'#e74c3c', geojson:'육호차_FeaturesToJSON.geojson',  order:5 },
-  "city": { id:'city', name:'종건',   license:'종합건설본부', color:'#cccccc', geojson:'종건_FeaturesToJSON.geojson',   order:6 },
+  vehicle_1:    { id:'1',    name:'1호차',  license:'006마7163',   color:'#888888', geojson:'일호차_FeaturesToJSON.geojson',  order:0 },
+  vehicle_2:    { id:'2',    name:'2호차',  license:'006마8362',   color:'#00a9e4', geojson:'이호차_FeaturesToJSON.geojson',  order:1 },
+  vehicle_3:    { id:'3',    name:'3호차',  license:'67사7717',    color:'#38a700', geojson:'삼호차_FeaturesToJSON.geojson',  order:2 },
+  vehicle_4:    { id:'4',    name:'4호차',  license:'-',           color:'#9b59b6', geojson:'사호차_FeaturesToJSON.geojson',  order:3 },
+  vehicle_5:    { id:'5',    name:'5호차',  license:'인천06아7616', color:'#e79972', geojson:'오호차_FeaturesToJSON.geojson',  order:4 },
+  vehicle_6:    { id:'6',    name:'6호차',  license:'06사6617',    color:'#e74c3c', geojson:'육호차_FeaturesToJSON.geojson',  order:5 },
+  vehicle_city: { id:'city', name:'종건',   license:'종합건설본부', color:'#cccccc', geojson:'종건_FeaturesToJSON.geojson',   order:6 },
 };
+
 const STALE_MS   = 5  * 60 * 1000;  // 5분 → 신호끊김
 const OFFLINE_MS = 30 * 60 * 1000;  // 30분 → 오프라인 취급
 
@@ -277,7 +269,7 @@ const map = L.map('map', { zoomControl: true, attributionControl: true })
              .setView([37.4609, 126.6738], 14);
 
 L.tileLayer(
-  `https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_KEY}/Base/{z}/{y}/{x}.png`,
+  `http://api.vworld.kr/req/wmts/1.0.0/${VWORLD_KEY}/Base/{z}/{y}/{x}.png`,
   { attribution: '© VWorld', minZoom: 10, maxZoom: 19 }
 ).addTo(map);
 
@@ -315,7 +307,6 @@ Object.entries(VEHICLES).forEach(([key, v]) => {
 const markers   = {};   // key → L.Marker
 const trails    = {};   // key → { coords:[], line:L.Polyline }
 const liveData  = {};   // key → Firebase 수신 데이터
-let isInitialPanDone = false; // 최초 1회 화면 이동을 위한 변수 추가
 
 // ============================================================
 // 차량 아이콘 생성
@@ -387,12 +378,6 @@ function updateVehicle(key, data) {
   const latlng = L.latLng(data.lat, data.lng);
   const now    = Date.now();
   const active = data.active && (now - data.timestamp) < STALE_MS;
-
-  // 최초 수신 시 해당 차량 위치로 지도 이동 (추가된 부분)
-  if (!isInitialPanDone) {
-    map.setView(latlng, 15);
-    isInitialPanDone = true;
-  }
 
   // 마커
   if (markers[key]) {
@@ -518,7 +503,6 @@ function pushLog(msg, color) {
 // ============================================================
 db.ref('snow_vehicles').on('value', snapshot => {
   const allData = snapshot.val();
-  console.log("🔥 서버에서 넘어온 데이터:", allData);
   if (!allData) { refreshPanel(); return; }
 
   Object.entries(allData).forEach(([key, data]) => {
