@@ -161,7 +161,7 @@ const db = firebase.database();
 // ============================================================
 const map = L.map('map', { zoomControl: true }).setView([37.4609, 126.6738], 15);
 L.tileLayer(
-  `http://api.vworld.kr/req/wmts/1.0.0/${VWORLD_KEY}/Base/{z}/{y}/{x}.png`,
+  `https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_KEY}/Base/{z}/{y}/{x}.png`,
   { attribution: '© VWorld', minZoom: 10, maxZoom: 19 }
 ).addTo(map);
 
