@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>미추홀구 제설차량 상황실</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+  <style>
+    /* ── 변수 / 리셋 ── */
+    :root {
+      --bg:       #080c16;
+      --surface:  #0f1724;
+      --surface2: #141e2e;
+      --border:   #1c2840;
+      --text:     #d0dae8;
+      --muted:    #5a6f8a;
+      --accent:   #3b7dd8;
+      --green:    #3fb950;
+      --red:      #f85149;
+      --yellow:   #e3b341;
+    }
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; font-family: 'Malgun Gothic', '맑은 고딕', sans-serif; background: var(--bg); color: var(--text); overflow: hidden; }
+    
+    /* ── 앱 레이아웃 ── */
+    #app { display: flex; flex-direction: column; height: 100vh; }
+    #main { display: flex; flex: 1; overflow: hidden; }
+
+    /* ── 헤더 ── */
+    #header {
+      background: linear-gradient(90deg, var(--surface) 0%, var(--surface2) 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 0 20px;
+      height: 54px;
+      display: flex; align-items: center; justify-content: space-between;
+      flex-shrink: 0;
+      position: relative;
+    }
+    #header::after {
+      content: '';
+      position: absolute; bottom: -2px; left: 0; right: 0; height: 2px;
+      background: linear-gradient(90deg, var(--accent), #5be7c4, var(--accent));
+      opacity: 0.5;
+    }
+    .hdr-left { display: flex; align-items: center; gap: 14px; }
+    .hdr-title { font-size: 17px; font-weight: 700; letter-spacing: -0.3px; }
+    .hdr-sub   { font-size: 10px; color: var(--muted); margin-top: 2px; }
+    .live-badge {
+      display: flex; align-items: center; gap: 6px;
+      background: rgba(59,125,216,0.12);
+      border: 1px solid rgba(59,125,216,0.35);
+      padding: 4px 12px; border-radius: 20px;
+      font-size: 11px; font-weight: 700; color: #6bb3ff; letter-spacing: 1px;
+    }
+    .live-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--green); animation: blink 1.4s infinite;
+    }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.15; } }
+
+    #clock { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; color: #6bb3ff; letter-spacing: 1.5px; }
+    #dateline { font-size: 11px; color: var(--muted); margin-top: 2px; text-align: right; }
+
+    /* ── 지도 ── */
+    #map { flex: 1; }
+
+    /* ── 우측 패널 ── */
+    #panel {
+      width: 310px; flex-shrink: 0;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+
+    /* 패널 섹션 */
+    .p-section { border-bottom: 1px solid var(--border); padding: 13px 15px; }
+    .p-title {
+      font-size: 10px; font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px;
+    }
+
+    /* 요약 그리드 */
+    .summary-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+    .s-card {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px; padding: 10px 6px; text-align: center;
+    }
+    .s-val  { font-size: 24px; font-weight: 700; }
+    .s-lbl  { font-size: 9px; color: var(--muted); margin-top: 2px; }
+
+    /* 차량 목록 */
+    #vehicle-list { flex: 1; overflow-y: auto; }
+    .v-card {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 15px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer; transition: background .15s;
+    }
+    .v-card:hover { background: rgba(255,255,255,.03); }
+    .v-card.following { background: rgba(59,125,216,.1); }
+
+    .v-dot { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; border: 2px solid rgba(255,255,255,.25); }
+    .v-info { flex: 1; min-width: 0; }
+    .v-name    { font-size: 13px; font-weight: 700; }
+    .v-plate   { font-size: 10px; color: var(--muted); }
+    .v-updated { font-size: 10px; color: var(--muted); margin-top: 2px; }
+    .v-right   { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+    .v-speed   { font-size: 12px; font-weight: 600; color: #58a6ff; }
+
+    .badge {
+      font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 10px;
+      letter-spacing: .3px;
+    }
+    .badge.on   { background: rgba(63,185,80,.18); color: var(--green); border: 1px solid rgba(63,185,80,.4); }
+    .badge.stale{ background: rgba(227,179,65,.18); color: var(--yellow); border: 1px solid rgba(227,179,65,.4); }
+    .badge.off  { background: rgba(248,81,73,.13); color: var(--red);  border: 1px solid rgba(248,81,73,.35); }
+
+    /* 로그 영역 */
+    #log-wrap { border-top: 1px solid var(--border); }
+    .p-title-log { font-size: 10px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; padding: 10px 15px 6px; }
+    #log-list { height: 140px; overflow-y: auto; }
+    .log-row {
+      display: flex; gap: 8px; padding: 5px 15px;
+      border-bottom: 1px solid rgba(28,40,64,.6);
+      font-size: 11px;
+    }
+    .log-ts  { color: var(--muted); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+    .log-msg { flex: 1; }
+
+    /* 스크롤바 */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* 지도 위 따라가기 버튼 */
+    #follow-cancel {
+      display: none;
+      position: absolute; top: 70px; left: 50%; transform: translateX(-50%);
+      z-index: 1000;
+      background: rgba(59,125,216,.9); color: #fff; font-size: 12px;
+      border: none; border-radius: 20px; padding: 6px 16px; cursor: pointer;
+      font-family: inherit;
+    }
+
+    /* 반응형 (모바일) */
+    @media (max-width: 820px) {
+      #main { flex-direction: column; }
+      #panel { width: 100%; height: 260px; border-left: none; border-top: 1px solid var(--border); }
+      #map   { flex: 1; }
+    }
+
+    /* Leaflet 팝업 한글 폰트 */
+    .leaflet-popup-content { font-family: 'Malgun Gothic', sans-serif; }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <!-- 헤더 -->
+  <div id="header">
+    <div class="hdr-left">
+      <div style="font-size:26px;">🏙️</div>
+      <div>
+        <div class="hdr-title">미추홀구 제설차량 실시간 상황실</div>
+        <div class="hdr-sub">Michuhol-gu Snow Removal Vehicle Control Center</div>
+      </div>
+    </div>
+    <div style="display:flex; align-items:center; gap:18px;">
+      <div class="live-badge"><div class="live-dot"></div>LIVE</div>
+      <div>
+        <div id="clock">--:--:--</div>
+        <div id="dateline"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="main">
+    <div id="map" style="position:relative;">
+      <button id="follow-cancel" onclick="cancelFollow()">✕ 추적 해제</button>
+    </div>
+
+    <!-- 우측 패널 -->
+    <div id="panel">
+
+      <!-- 요약 -->
+      <div class="p-section">
+        <div class="p-title">현황 요약</div>
+        <div class="summary-grid">
+          <div class="s-card">
+            <div class="s-val" id="sum-on" style="color:var(--green);">0</div>
+            <div class="s-lbl">운행중</div>
+          </div>
+          <div class="s-card">
+            <div class="s-val" id="sum-stale" style="color:var(--yellow);">0</div>
+            <div class="s-lbl">신호끊김</div>
+          </div>
+          <div class="s-card">
+            <div class="s-val" id="sum-off" style="color:var(--muted);">7</div>
+            <div class="s-lbl">미접속</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 차량 목록 제목 -->
+      <div style="padding:10px 15px 4px; border-bottom:1px solid var(--border);">
+        <div class="p-title" style="margin:0;">차량별 현황 — 클릭시 추적</div>
+      </div>
+
+      <!-- 차량 카드 목록 -->
+      <div id="vehicle-list"></div>
+
+      <!-- 활동 로그 -->
+      <div id="log-wrap">
+        <div class="p-title-log">실시간 로그</div>
+        <div id="log-list"></div>
+      </div>
+    </div><!-- /panel -->
+  </div><!-- /main -->
+</div><!-- /app -->
+
+<script>
+// ============================================================
+// 🔧 Firebase 설정 – 본인 Firebase 프로젝트 값으로 교체하세요
+// ============================================================
+const firebaseConfig = {
+  apiKey: "AIzaSyDJD5LmxSMBRy0fkR6oYo89gWMArg5xzaA",
+  authDomain: "gps-snow.firebaseapp.com",
+  databaseURL: "https://gps-snow-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "gps-snow",
+  storageBucket: "gps-snow.firebasestorage.app",
+  messagingSenderId: "846634697538",
+  appId: "1:846634697538:web:522689f1d0ba99edf67edb",
+  measurementId: "G-2LNS2XS92H"
+};
+
+// 🔧 VWorld API 키
+const VWORLD_KEY = 'CCA5DC05-6EDE-3BE5-A2DE-582966148562';
+
+// ============================================================
+// 차량 정보 테이블
+// ============================================================
+const VEHICLES = {
+  vehicle_1:    { id:'1',    name:'1호차',  license:'006마7163',   color:'#888888', geojson:'일호차_FeaturesToJSON.geojson',  order:0 },
+  vehicle_2:    { id:'2',    name:'2호차',  license:'006마8362',   color:'#00a9e4', geojson:'이호차_FeaturesToJSON.geojson',  order:1 },
+  vehicle_3:    { id:'3',    name:'3호차',  license:'67사7717',    color:'#38a700', geojson:'삼호차_FeaturesToJSON.geojson',  order:2 },
+  vehicle_4:    { id:'4',    name:'4호차',  license:'-',           color:'#9b59b6', geojson:'사호차_FeaturesToJSON.geojson',  order:3 },
+  vehicle_5:    { id:'5',    name:'5호차',  license:'인천06아7616', color:'#e79972', geojson:'오호차_FeaturesToJSON.geojson',  order:4 },
+  vehicle_6:    { id:'6',    name:'6호차',  license:'06사6617',    color:'#e74c3c', geojson:'육호차_FeaturesToJSON.geojson',  order:5 },
+  vehicle_city: { id:'city', name:'종건',   license:'종합건설본부', color:'#cccccc', geojson:'종건_FeaturesToJSON.geojson',   order:6 },
+};
+
+const STALE_MS   = 5  * 60 * 1000;  // 5분 → 신호끊김
+const OFFLINE_MS = 30 * 60 * 1000;  // 30분 → 오프라인 취급
+
+// ============================================================
+// Firebase 초기화
+// ============================================================
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+// ============================================================
+// Leaflet 지도 초기화
+// ============================================================
+const map = L.map('map', { zoomControl: true, attributionControl: true })
+             .setView([37.4609, 126.6738], 14);
+
+L.tileLayer(
+  `http://api.vworld.kr/req/wmts/1.0.0/${VWORLD_KEY}/Base/{z}/{y}/{x}.png`,
+  { attribution: '© VWorld', minZoom: 10, maxZoom: 19 }
+).addTo(map);
+
+// VWorld 실패 시 OSM 폴백
+map.on('tileerror', () => {
+  if (!map._osmAdded) {
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      { attribution: '© OpenStreetMap', maxZoom: 19 }).addTo(map);
+    map._osmAdded = true;
+  }
+});
+
+// ============================================================
+// 모든 노선 GeoJSON 로드
+// ============================================================
+Object.entries(VEHICLES).forEach(([key, v]) => {
+  fetch(v.geojson)
+    .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+    .then(data => {
+      L.geoJSON(data, {
+        style: {
+          color:   v.color,
+          weight:  4,
+          opacity: 0.6,
+          dashArray: key === 'vehicle_city' ? '6,4' : null
+        }
+      }).addTo(map).bindTooltip(v.name + ' 담당 노선', { sticky: true });
+    })
+    .catch(() => console.warn(`${v.name} GeoJSON 없음`));
+});
+
+// ============================================================
+// 마커 / 궤적 / 데이터 저장소
+// ============================================================
+const markers   = {};   // key → L.Marker
+const trails    = {};   // key → { coords:[], line:L.Polyline }
+const liveData  = {};   // key → Firebase 수신 데이터
+
+// ============================================================
+// 차량 아이콘 생성
+// ============================================================
+function makeTruckIcon(v, active) {
+  const ripple = active ? `
+    <div style="
+      position:absolute; inset:-6px; border-radius:50%;
+      border:2px solid ${v.color};
+      animation:ripple 2.2s infinite; pointer-events:none;">
+    </div>` : '';
+  return L.divIcon({
+    html: `
+      <style>@keyframes ripple{0%{transform:scale(1);opacity:.6}100%{transform:scale(2.2);opacity:0}}</style>
+      <div style="position:relative;width:42px;height:42px;">
+        ${ripple}
+        <div style="
+          position:absolute;inset:0;
+          background:${v.color};
+          border:3px solid ${active ? '#fff' : '#444'};
+          border-radius:50%;
+          display:flex;align-items:center;justify-content:center;
+          font-size:19px;
+          box-shadow:0 0 14px ${v.color}, 0 3px 10px rgba(0,0,0,.6);
+          opacity:${active ? 1 : 0.35};">🚛</div>
+      </div>`,
+    className:  '',
+    iconSize:   [42, 42],
+    iconAnchor: [21, 21],
+  });
+}
+
+// ============================================================
+// 팝업 HTML
+// ============================================================
+function makePopup(key, data) {
+  const v      = VEHICLES[key];
+  const ageSec = Math.floor((Date.now() - data.timestamp) / 1000);
+  const ageStr = ageSec < 60 ? `${ageSec}초 전` : `${Math.floor(ageSec/60)}분 전`;
+  return `
+    <div style="font-family:'Malgun Gothic',sans-serif;min-width:200px;">
+      <div style="font-size:15px;font-weight:700;margin-bottom:8px;color:${v.color};">🚛 ${v.name}</div>
+      <table style="font-size:12px;width:100%;border-collapse:collapse;">
+        <tr><td style="padding:3px 0;color:#888;width:60px;">차량번호</td><td>${data.license || v.license}</td></tr>
+        <tr><td style="padding:3px 0;color:#888;">속&nbsp;&nbsp;&nbsp;도</td><td>${data.speed || 0} km/h</td></tr>
+        <tr><td style="padding:3px 0;color:#888;">정확도</td><td>±${data.accuracy || '-'} m</td></tr>
+        <tr><td style="padding:3px 0;color:#888;">마지막</td><td>${ageStr}</td></tr>
+        <tr><td style="padding:3px 0;color:#888;">좌&nbsp;&nbsp;&nbsp;표</td>
+            <td style="font-size:10px;">${data.lat?.toFixed(5)}, ${data.lng?.toFixed(5)}</td></tr>
+      </table>
+      <div style="margin-top:10px;text-align:center;">
+        <button onclick="followVehicle('${key}')" style="
+          background:${v.color};color:#fff;border:none;
+          padding:5px 18px;border-radius:4px;cursor:pointer;
+          font-size:12px;font-family:inherit;">
+          🎯 이 차량 따라가기
+        </button>
+      </div>
+    </div>`;
+}
+
+// ============================================================
+// 차량 위치 업데이트
+// ============================================================
+function updateVehicle(key, data) {
+  const v = VEHICLES[key];
+  if (!v || !data.lat || !data.lng) return;
+
+  const latlng = L.latLng(data.lat, data.lng);
+  const now    = Date.now();
+  const active = data.active && (now - data.timestamp) < STALE_MS;
+
+  // 마커
+  if (markers[key]) {
+    markers[key].setLatLng(latlng);
+    markers[key].setIcon(makeTruckIcon(v, active));
+    markers[key].setZIndexOffset(active ? 1000 : 0);
+  } else {
+    markers[key] = L.marker(latlng, {
+      icon: makeTruckIcon(v, active),
+      zIndexOffset: active ? 1000 : 0
+    }).addTo(map);
+    markers[key].bindPopup(() => makePopup(key, liveData[key] || data));
+  }
+
+  // 궤적 (운행중일 때만)
+  if (active) {
+    if (!trails[key]) {
+      trails[key] = {
+        coords: [],
+        line:   L.polyline([], { color: v.color, weight: 2, opacity: 0.55, dashArray: '6,5' }).addTo(map)
+      };
+    }
+    trails[key].coords.push(latlng);
+    if (trails[key].coords.length > 300) trails[key].coords.shift();
+    trails[key].line.setLatLngs(trails[key].coords);
+  }
+
+  // 데이터 저장
+  liveData[key] = { ...data, receivedAt: now };
+
+  // 추적 모드
+  if (followingKey === key) map.panTo(latlng);
+}
+
+// ============================================================
+// 차량 카드 / 요약 갱신
+// ============================================================
+function refreshPanel() {
+  const now    = Date.now();
+  let cntOn = 0, cntStale = 0, cntOff = 0;
+
+  const html = Object.entries(VEHICLES)
+    .sort(([,a],[,b]) => a.order - b.order)
+    .map(([key, v]) => {
+      const d = liveData[key];
+      let cls = 'off', label = '미접속', speedTxt = '-', updTxt = '-';
+
+      if (d) {
+        const age = now - d.timestamp;
+        if (!d.active || age > OFFLINE_MS) {
+          cls = 'off'; label = '오프라인'; cntOff++;
+        } else if (age > STALE_MS) {
+          cls = 'stale'; label = '신호끊김'; cntStale++;
+        } else {
+          cls = 'on'; label = '운행중'; cntOn++;
+        }
+        speedTxt = `${d.speed || 0} km/h`;
+        const t  = new Date(d.timestamp);
+        updTxt   = `${pad(t.getHours())}:${pad(t.getMinutes())}:${pad(t.getSeconds())} 수신`;
+      } else {
+        cntOff++;
+      }
+
+      const following = followingKey === key ? 'following' : '';
+      return `
+        <div class="v-card ${following}" onclick="followVehicle('${key}')">
+          <div class="v-dot" style="background:${v.color};"></div>
+          <div class="v-info">
+            <div class="v-name">${v.name}</div>
+            <div class="v-plate">${v.license}</div>
+            <div class="v-updated">${updTxt}</div>
+          </div>
+          <div class="v-right">
+            <span class="badge ${cls}">${label}</span>
+            <span class="v-speed">${speedTxt}</span>
+          </div>
+        </div>`;
+    }).join('');
+
+  document.getElementById('vehicle-list').innerHTML = html;
+  document.getElementById('sum-on').textContent    = cntOn;
+  document.getElementById('sum-stale').textContent = cntStale;
+  document.getElementById('sum-off').textContent   = cntOff;
+}
+
+// ============================================================
+// 차량 추적 (follow)
+// ============================================================
+let followingKey = null;
+function followVehicle(key) {
+  followingKey = key;
+  document.getElementById('follow-cancel').style.display = 'block';
+  if (markers[key]) map.setView(markers[key].getLatLng(), 17);
+  refreshPanel();
+}
+function cancelFollow() {
+  followingKey = null;
+  document.getElementById('follow-cancel').style.display = 'none';
+  refreshPanel();
+}
+window.followVehicle = followVehicle;
+window.cancelFollow  = cancelFollow;
+
+// ============================================================
+// 활동 로그
+// ============================================================
+const logItems = [];
+function pushLog(msg, color) {
+  const t   = new Date();
+  const ts  = `${pad(t.getHours())}:${pad(t.getMinutes())}:${pad(t.getSeconds())}`;
+  logItems.unshift({ ts, msg, color: color || 'var(--text)' });
+  if (logItems.length > 60) logItems.pop();
+  document.getElementById('log-list').innerHTML =
+    logItems.map(l => `
+      <div class="log-row">
+        <span class="log-ts">${l.ts}</span>
+        <span class="log-msg" style="color:${l.color};">${l.msg}</span>
+      </div>`).join('');
+}
+
+// ============================================================
+// Firebase 실시간 리스너
+// ============================================================
+db.ref('snow_vehicles').on('value', snapshot => {
+  const allData = snapshot.val();
+  if (!allData) { refreshPanel(); return; }
+
+  Object.entries(allData).forEach(([key, data]) => {
+    if (!VEHICLES[key] || !data.lat || !data.lng) return;
+
+    const v     = VEHICLES[key];
+    const isNew = !liveData[key];
+    const wasOn = liveData[key]?.active && (Date.now() - (liveData[key]?.timestamp || 0)) < STALE_MS;
+    const now   = Date.now();
+    const isOn  = data.active && (now - data.timestamp) < STALE_MS;
+
+    updateVehicle(key, data);
+
+    // 로그 이벤트
+    if (isNew && data.active) {
+      pushLog(`${v.name} 접속 시작`, v.color);
+    } else if (!wasOn && isOn) {
+      pushLog(`${v.name} 신호 복구`, v.color);
+    } else if (wasOn && !isOn) {
+      pushLog(`${v.name} 신호 끊김`, 'var(--yellow)');
+    }
+  });
+
+  refreshPanel();
+});
+
+// ============================================================
+// 시계
+// ============================================================
+const WEEKDAYS = ['일','월','화','수','목','금','토'];
+function tickClock() {
+  const n = new Date();
+  document.getElementById('clock').textContent =
+    `${pad(n.getHours())}:${pad(n.getMinutes())}:${pad(n.getSeconds())}`;
+  document.getElementById('dateline').textContent =
+    `${n.getFullYear()}.${pad(n.getMonth()+1)}.${pad(n.getDate())} (${WEEKDAYS[n.getDay()]})`;
+}
+setInterval(tickClock, 1000);
+tickClock();
+
+// 패널 10초마다 상태 재갱신 (stale 판정 등)
+setInterval(refreshPanel, 10_000);
+
+function pad(n) { return String(n).padStart(2, '0'); }
+
+// 초기 로그
+pushLog('상황실 시스템 시작', 'var(--green)');
+refreshPanel();
+</script>
+</body>
+</html>

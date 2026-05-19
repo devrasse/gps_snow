@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>제설차량 GPS 추적기</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      height: 100%; overflow: hidden;
+      font-family: 'Malgun Gothic', '맑은 고딕', sans-serif;
+      background: #0d1117; color: #e6edf3;
+    }
+    #app { display: flex; flex-direction: column; height: 100vh; }
+
+    /* ── 헤더 ── */
+    #header {
+      background: linear-gradient(135deg, #161b22, #21262d);
+      padding: 10px 14px;
+      border-bottom: 1px solid #30363d;
+      display: flex; align-items: center; gap: 10px;
+      flex-shrink: 0;
+    }
+    #header-icon { font-size: 26px; }
+    #header-text h1 { font-size: 15px; font-weight: 700; }
+    #header-text small { display: block; font-size: 10px; color: #8b949e; }
+    #vehicle-badge {
+      margin-left: auto;
+      padding: 6px 14px; border-radius: 6px;
+      font-weight: 700; font-size: 14px; color: #fff;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+    }
+
+    /* ── 오류 배너 ── */
+    #error-banner {
+      display: none; background: #da3633; color: #fff;
+      padding: 8px 14px; font-size: 12px; text-align: center;
+      flex-shrink: 0;
+    }
+
+    /* ── 지도 ── */
+    #map { flex: 1; }
+
+    /* ── 하단 상태바 ── */
+    #status-bar {
+      background: #161b22; border-top: 1px solid #30363d;
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      flex-shrink: 0;
+    }
+    .stat {
+      text-align: center; padding: 10px 4px;
+      border-right: 1px solid #30363d;
+    }
+    .stat:last-child { border-right: none; }
+    .stat-value { font-size: 17px; font-weight: 700; color: #58a6ff; }
+    .stat-label { font-size: 10px; color: #8b949e; margin-top: 1px; }
+
+    /* ── 상태 점 ── */
+    .dot {
+      display: inline-block; width: 10px; height: 10px;
+      border-radius: 50%; background: #e3b341;
+    }
+    .dot.online  { background: #3fb950; animation: blink 1.5s infinite; }
+    .dot.error   { background: #f85149; }
+    @keyframes blink {
+      0%, 100% { opacity: 1; } 50% { opacity: 0.25; }
+    }
+
+    /* ── 전송 카운터 배지 ── */
+    #send-count { font-size: 17px; font-weight: 700; color: #3fb950; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div id="header">
+    <div id="header-icon">🚛</div>
+    <div id="header-text">
+      <h1>제설차량 GPS 추적기</h1>
+      <small>미추홀구 제설작업 현황시스템</small>
+    </div>
+    <div id="vehicle-badge">로딩중</div>
+  </div>
+
+  <div id="error-banner"></div>
+  <div id="map"></div>
+
+  <div id="status-bar">
+    <div class="stat">
+      <div class="stat-value" id="stat-speed">0</div>
+      <div class="stat-label">속도 (km/h)</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="stat-acc">-</div>
+      <div class="stat-label">정확도 (m)</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="stat-time" style="font-size:13px;">--:--:--</div>
+      <div class="stat-label">마지막 전송</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value"><span class="dot" id="status-dot"></span></div>
+      <div class="stat-label" id="stat-status">대기중</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// 🔧 Firebase 설정 – 본인 Firebase 프로젝트 값으로 교체하세요
+// ============================================================
+const firebaseConfig = {
+  apiKey: "AIzaSyDJD5LmxSMBRy0fkR6oYo89gWMArg5xzaA",
+  authDomain: "gps-snow.firebaseapp.com",
+  databaseURL: "https://gps-snow-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "gps-snow",
+  storageBucket: "gps-snow.firebasestorage.app",
+  messagingSenderId: "846634697538",
+  appId: "1:846634697538:web:522689f1d0ba99edf67edb",
+  measurementId: "G-2LNS2XS92H"
+};
+
+// 🔧 VWorld API 키 (기존 키 재사용 – 필요 시 교체)
+const VWORLD_KEY = 'CCA5DC05-6EDE-3BE5-A2DE-582966148562';
+
+// ============================================================
+// 차량 정보 테이블
+// URL 파라미터 예: tracker.html?v=1  (1~6 또는 city)
+// ============================================================
+const VEHICLES = {
+  '1':    { name: '1호차',  license: '006마7163',    color: '#888888', geojson: '일호차_FeaturesToJSON.geojson' },
+  '2':    { name: '2호차',  license: '006마8362',    color: '#00a9e4', geojson: '이호차_FeaturesToJSON.geojson' },
+  '3':    { name: '3호차',  license: '67사7717',     color: '#38a700', geojson: '삼호차_FeaturesToJSON.geojson' },
+  '4':    { name: '4호차',  license: '-',            color: '#9b59b6', geojson: '사호차_FeaturesToJSON.geojson' },
+  '5':    { name: '5호차',  license: '인천06아7616',  color: '#e79972', geojson: '오호차_FeaturesToJSON.geojson' },
+  '6':    { name: '6호차',  license: '06사6617',     color: '#e74c3c', geojson: '육호차_FeaturesToJSON.geojson' },
+  'city': { name: '종건',   license: '종합건설본부',  color: '#cccccc', geojson: '종건_FeaturesToJSON.geojson'  },
+};
+
+const params  = new URLSearchParams(window.location.search);
+const vid     = params.get('v') || '1';
+const vehicle = VEHICLES[vid] || VEHICLES['1'];
+const fbPath  = `snow_vehicles/vehicle_${vid}`;
+
+// 배지 표시
+const badge = document.getElementById('vehicle-badge');
+badge.textContent       = vehicle.name;
+badge.style.background  = vehicle.color;
+
+// ============================================================
+// Firebase 초기화
+// ============================================================
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+// ============================================================
+// 지도 초기화 (VWorld 타일)
+// ============================================================
+const map = L.map('map', { zoomControl: true }).setView([37.4609, 126.6738], 15);
+L.tileLayer(
+  `http://api.vworld.kr/req/wmts/1.0.0/${VWORLD_KEY}/Base/{z}/{y}/{x}.png`,
+  { attribution: '© VWorld', minZoom: 10, maxZoom: 19 }
+).addTo(map);
+
+// VWorld 실패 시 OSM 폴백
+map.on('tileerror', () => {
+  if (!map._osmAdded) {
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      { attribution: '© OpenStreetMap' }).addTo(map);
+    map._osmAdded = true;
+  }
+});
+
+// ============================================================
+// 담당 노선 GeoJSON 로드
+// ============================================================
+fetch(vehicle.geojson)
+  .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+  .then(data => {
+    L.geoJSON(data, {
+      style: { color: vehicle.color, weight: 5, opacity: 0.75 }
+    }).addTo(map).bindTooltip(`${vehicle.name} 담당 노선`, { sticky: true });
+  })
+  .catch(() => console.warn('GeoJSON 로드 실패 – 파일이 같은 경로에 있는지 확인하세요'));
+
+// ============================================================
+// 차량 마커 아이콘 생성
+// ============================================================
+function makeTruckIcon(color) {
+  return L.divIcon({
+    html: `<div style="
+        width:38px; height:38px;
+        background:${color};
+        border:3px solid #fff;
+        border-radius:50%;
+        display:flex; align-items:center; justify-content:center;
+        font-size:18px;
+        box-shadow:0 0 14px ${color}, 0 2px 8px rgba(0,0,0,.6);">
+      🚛
+    </div>`,
+    className: '', iconSize: [38, 38], iconAnchor: [19, 19]
+  });
+}
+
+// ============================================================
+// 상태 변수
+// ============================================================
+let locationMarker  = null;
+let accuracyCircle  = null;
+const pathCoords    = [];
+const pathLine      = L.polyline([], {
+  color: vehicle.color, weight: 3, opacity: 0.65, dashArray: '8,6'
+}).addTo(map);
+let lastSentAt      = 0;
+const SEND_INTERVAL = 3000;   // 3초마다 Firebase 전송
+
+// ============================================================
+// 위치 성공 콜백
+// ============================================================
+function onSuccess(pos) {
+  const { latitude: lat, longitude: lng, speed, accuracy, heading } = pos.coords;
+  const latlng = L.latLng(lat, lng);
+  const now    = Date.now();
+
+  // 마커 생성 / 이동
+  if (!locationMarker) {
+    locationMarker = L.marker(latlng, { icon: makeTruckIcon(vehicle.color), zIndexOffset: 1000 })
+      .addTo(map)
+      .bindPopup(`<b>${vehicle.name}</b><br>🚘 ${vehicle.license}`);
+    map.setView(latlng, 16);
+  } else {
+    locationMarker.setLatLng(latlng);
+  }
+
+  // 정확도 원
+  if (accuracyCircle) accuracyCircle.setLatLng(latlng).setRadius(accuracy);
+  else accuracyCircle = L.circle(latlng, {
+    radius: accuracy, color: vehicle.color, weight: 1, fillOpacity: 0.08
+  }).addTo(map);
+
+  // 궤적
+  pathCoords.push(latlng);
+  if (pathCoords.length > 800) pathCoords.shift();
+  pathLine.setLatLngs(pathCoords);
+
+  // UI
+  const kmh = speed != null ? (speed * 3.6).toFixed(1) : '0';
+  document.getElementById('stat-speed').textContent = kmh;
+  document.getElementById('stat-acc').textContent   = accuracy ? Math.round(accuracy) : '-';
+  document.getElementById('error-banner').style.display = 'none';
+
+  // Firebase 전송 (SEND_INTERVAL 인터벌 제한)
+  if (now - lastSentAt >= SEND_INTERVAL) {
+    lastSentAt = now;
+    sendToFirebase(lat, lng, kmh, accuracy, heading, now);
+  }
+}
+
+// ============================================================
+// Firebase 전송 함수
+// ============================================================
+function sendToFirebase(lat, lng, speedKmh, accuracy, heading, ts) {
+  db.ref(fbPath).set({
+    vehicleId:   vid,
+    vehicleName: vehicle.name,
+    license:     vehicle.license,
+    lat, lng,
+    speed:       parseFloat(speedKmh) || 0,
+    heading:     heading || 0,
+    accuracy:    accuracy ? parseFloat(accuracy.toFixed(1)) : 0,
+    timestamp:   ts,
+    active:      true
+  })
+  .then(() => {
+    const t = new Date(ts);
+    document.getElementById('stat-time').textContent =
+      `${pad(t.getHours())}:${pad(t.getMinutes())}:${pad(t.getSeconds())}`;
+    dot('online');
+    document.getElementById('stat-status').textContent = '전송완료';
+  })
+  .catch(() => {
+    dot('error');
+    document.getElementById('stat-status').textContent = '전송실패';
+  });
+}
+
+function pad(n) { return String(n).padStart(2, '0'); }
+function dot(cls) {
+  const el = document.getElementById('status-dot');
+  el.className = 'dot ' + cls;
+}
+
+// ============================================================
+// 위치 오류 콜백
+// ============================================================
+function onError(err) {
+  const msgs = {
+    1: '위치 권한이 거부되었습니다. 브라우저 설정에서 위치 허용을 확인하세요.',
+    2: '위치 신호를 받을 수 없습니다. GPS 상태를 확인하세요.',
+    3: '위치 요청이 시간 초과되었습니다.',
+  };
+  const banner = document.getElementById('error-banner');
+  banner.textContent  = msgs[err.code] || err.message;
+  banner.style.display = 'block';
+  dot('error');
+  document.getElementById('stat-status').textContent = '위치오류';
+}
+
+// ============================================================
+// GPS 추적 시작
+// ============================================================
+if (navigator.geolocation) {
+  navigator.geolocation.watchPosition(onSuccess, onError, {
+    enableHighAccuracy: true, maximumAge: 2000, timeout: 15000
+  });
+  document.getElementById('stat-status').textContent = '추적중';
+} else {
+  dot('error');
+  document.getElementById('stat-status').textContent = '미지원';
+  alert('이 브라우저는 위치 서비스를 지원하지 않습니다.');
+}
+
+// ============================================================
+// 페이지 닫힐 때 비활성 표시
+// ============================================================
+window.addEventListener('beforeunload', () => {
+  navigator.sendBeacon
+    ? db.ref(fbPath + '/active').set(false)
+    : null;
+  db.ref(fbPath + '/active').set(false);
+});
+</script>
+</body>
+</html>
